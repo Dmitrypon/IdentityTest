@@ -1,0 +1,60 @@
+services:
+  - docker:19.03.12-dind
+
+identity_build_dev:
+  image: mcr.microsoft.com/dotnet/sdk:6.0
+  stage: build
+  script:
+    - ls -lah
+    - cd backend/identity/
+    - dotnet build -c release
+    - ls -lah /builds/cloud_palantir/backend/backend/identity/bin/
+    - ls -lah /builds/cloud_palantir/backend/backend/identity/bin/release/net6.0/
+    # - dotnet tool install --global dotnet-ef --version 3.1.3
+    # - dotnet ef database update
+
+  artifacts:
+    paths:
+    - /builds/cloud_palantir/backend/backend/identity/bin/
+    expire_in: 5 min
+  only:
+    changes:
+      - "backend/identity/**/*" 
+      - dev
+docker_identity_dev:
+  image: docker:19.03.12
+  stage: docker
+  script:
+    - cd backend/identity/docker/
+    - mv /builds/cloud_palantir/backend/backend/identity/bin/release/net6.0/ ./Identity/
+    - ls -lah Identity/
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t registry.gitlab.com/cloud_palantir/backend/identity .
+    - docker push registry.gitlab.com/cloud_palantir/backend/identity
+  only:
+    changes:
+      - "backend/identity/**/*" 
+      - dev
+
+deploy_identity_dev:
+  stage: deploy
+  image: kroniak/ssh-client
+  before_script:
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    - echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - eval $(ssh-agent -s)
+    - ssh-add ~/.ssh/id_rsa
+  script:
+    - ssh 'dboon@backend.ru-central1.internal' sudo docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - ssh 'dboon@backend.ru-central1.internal' sudo docker pull registry.gitlab.com/cloud_palantir/backend/identity
+    - ssh 'dboon@backend.ru-central1.internal' sudo docker stop identity || true
+    - ssh 'dboon@backend.ru-central1.internal' sudo docker rm identity || true
+    - ssh 'dboon@backend.ru-central1.internal' sudo docker run -d -p 5005:5005 --name identity registry.gitlab.com/cloud_palantir/backend/identity
+  only:
+    changes:
+      - "backend/identity/**/*" 
+      - dev
+
